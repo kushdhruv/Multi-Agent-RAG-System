@@ -1,0 +1,26 @@
+# Web Framework and Server
+fastapi>=0.111.0
+uvicorn[standard]>=0.29.0
+
+# Data Validation and Configuration
+pydantic>=2.7.1
+pydantic-settings>=2.2.1
+python-dotenv>=1.0.1
+
+# PDF and Text Processing
+PyMuPDF>=1.24.1
+
+# AI/ML - Embeddings, Reranking, Vector DB, and Text Splitting
+sentence-transformers>=2.7.0
+pinecone-client>=4.1.1
+numpy>=1.26.4
+langchain>=0.2.1
+tiktoken>=0.7.0
+# Google Generative AI
+google-generativeai==0.7.1
+
+# LLM Interaction
+openai>=1.28.1
+
+# HTTP Client for Runner
+httpx>=0.27.0
