@@ -1,23 +1,20 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from typing import Optional
 
 class Settings(BaseSettings):
     """
-    Manages application settings loaded from a.env file.
+    Manages application settings loaded from a .env file.
     Pydantic's BaseSettings provides type validation for configuration variables.
     """
-    # Load settings from a.env file
+    # Load settings from the .env file in the project's root directory
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding='utf-8', extra='ignore')
 
-    # OpenAI API Key for LLM calls
-    OPENAI_API_KEY: str
-
-    # Bearer token for securing the API endpoint
-    HACKATHON_BEARER_TOKEN: str
-    
-    # --- NEW: Pinecone API Key ---
-    # API Key for connecting to the Pinecone vector database
+    # API Keys for external services
+    GOOGLE_API_KEY: str
     PINECONE_API_KEY: str
-    GOOGLE_API_KEY: str # Add this line
+    
+    # Bearer token is now optional, allowing it to be provided via the UI
+    HACKATHON_BEARER_TOKEN: Optional[str] = None
 
 # Create a single, globally accessible instance of the settings
-settings = Settings()                                                       
+settings = Settings()

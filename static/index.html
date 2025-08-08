@@ -12,7 +12,15 @@
             background-color: #f8fafc; /* slate-50 */
         }
         .loader {
-            border: 4px solid #f3f4f6;
+            border: 4px solid #e5e7eb;
+            border-top: 4px solid #3b82f6;
+            border-radius: 50%;
+            width: 20px;
+            height: 20px;
+            animation: spin 1s linear infinite;
+        }
+        .big-loader {
+            border: 4px solid #e5e7eb;
             border-top: 4px solid #3b82f6;
             border-radius: 50%;
             width: 40px;
@@ -22,6 +30,9 @@
         @keyframes spin {
             0% { transform: rotate(0deg); }
             100% { transform: rotate(360deg); }
+        }
+        .answer-paragraph {
+            white-space: pre-wrap; /* Preserve whitespace and wrap text */
         }
     </style>
 </head>
@@ -38,15 +49,21 @@
             <!-- Form Section -->
             <div class="space-y-6">
                 <div>
-                    <label for="doc-url" class="block text-sm font-semibold text-slate-700 mb-1">Document URL</label>
-                    <input type="text" id="doc-url" class="block w-full px-4 py-3 bg-slate-50 border border-slate-300 rounded-lg text-sm shadow-sm placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-sky-500 transition" value="https://hackrx.blob.core.windows.net/assets/policy.pdf?sv=2023-01-03&st=2025-07-04T09%3A11%3A24Z&se=2027-07-05T09%3A11%3A00Z&sr=b&sp=r&sig=N4a9OU0w0QXO6AOIBiu4bpl7AXvEZogeT%2FjUHNO7HzQ%3D">
+                    <div class="flex justify-between items-center mb-1">
+                        <label for="doc-url" class="block text-sm font-semibold text-slate-700">Document URL</label>
+                        <div id="ingestion-status" class="text-sm text-slate-500 flex items-center gap-2">
+                            <!-- Status will be injected here -->
+                        </div>
+                    </div>
+                    <input type="text" id="doc-url" class="block w-full px-4 py-3 bg-slate-50 border border-slate-300 rounded-lg text-sm shadow-sm placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-sky-500 transition" placeholder="https://your-document-url.pdf">
                 </div>
                 <div>
                     <label for="questions" class="block text-sm font-semibold text-slate-700 mb-1">Questions (one per line)</label>
-                    <textarea id="questions" rows="8" class="block w-full px-4 py-3 bg-slate-50 border border-slate-300 rounded-lg text-sm shadow-sm placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-sky-500 transition">What is the grace period for premium payment?
-What is the waiting period for pre-existing diseases (PED)?
-Does this policy cover maternity expenses?
-What is the waiting period for cataract surgery?</textarea>
+                    <textarea id="questions" rows="8" class="block w-full px-4 py-3 bg-slate-50 border border-slate-300 rounded-lg text-sm shadow-sm placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-sky-500 transition" placeholder="What is the policy's grace period?"></textarea>
+                </div>
+                <div>
+                    <label for="bearer-token" class="block text-sm font-semibold text-slate-700 mb-1">Bearer Token</label>
+                    <input type="password" id="bearer-token" class="block w-full px-4 py-3 bg-slate-50 border border-slate-300 rounded-lg text-sm shadow-sm placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-sky-500 transition" placeholder="Enter your API token here">
                 </div>
                 <button id="run-button" class="w-full bg-sky-600 hover:bg-sky-700 text-white font-bold py-3 px-4 rounded-lg transition duration-300 flex items-center justify-center gap-2">
                     <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 7-7 7 7"/><path d="M12 19V5"/></svg>
@@ -57,17 +74,10 @@ What is the waiting period for cataract surgery?</textarea>
             <!-- Results Section -->
             <div id="results-container" class="mt-10 hidden">
                 <h2 class="text-2xl font-bold text-slate-800 border-b pb-3 mb-6">Results</h2>
-                <!-- Loader -->
-                <div id="loader-container" class="flex justify-center items-center h-32">
-                    <div class="loader"></div>
-                    <p class="ml-4 text-slate-500">Processing... this may take a moment.</p>
-                </div>
-                <!-- Error Message -->
-                <div id="error-container" class="hidden bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg">
+                <div id="error-container" class="hidden bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg mb-4">
                     <strong class="font-bold">Error:</strong>
                     <span id="error-message" class="block sm:inline"></span>
                 </div>
-                <!-- Answers -->
                 <div id="answers-container" class="space-y-4">
                     <!-- Answers will be dynamically inserted here -->
                 </div>
@@ -77,28 +87,62 @@ What is the waiting period for cataract surgery?</textarea>
 
     <script>
         document.addEventListener('DOMContentLoaded', () => {
-            const runButton = document.getElementById('run-button');
             const docUrlInput = document.getElementById('doc-url');
             const questionsTextarea = document.getElementById('questions');
-            
+            const bearerTokenInput = document.getElementById('bearer-token');
+            const ingestionStatus = document.getElementById('ingestion-status');
+            const runButton = document.getElementById('run-button');
+
             const resultsContainer = document.getElementById('results-container');
-            const loaderContainer = document.getElementById('loader-container');
             const errorContainer = document.getElementById('error-container');
             const errorMessage = document.getElementById('error-message');
             const answersContainer = document.getElementById('answers-container');
 
+            const handleIngestion = async () => {
+                const docUrl = docUrlInput.value;
+                const bearerToken = bearerTokenInput.value;
+
+                if (!docUrl || !bearerToken) return;
+
+                ingestionStatus.innerHTML = `<div class="loader"></div> Processing...`;
+
+                try {
+                    const response = await fetch('/api/v1/hackrx/ingest', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Accept': 'application/json',
+                            'Authorization': `Bearer ${bearerToken}`
+                        },
+                        body: JSON.stringify({ documents: docUrl, questions: [] })
+                    });
+
+                    if (!response.ok) {
+                        const errorData = await response.json();
+                        throw new Error(errorData.detail || 'Ingestion failed');
+                    }
+                    
+                    ingestionStatus.innerHTML = `<span class="text-green-600 font-semibold">✅ Document Ready</span>`;
+
+                } catch (error) {
+                    ingestionStatus.innerHTML = `<span class="text-red-600 font-semibold">⚠️ Ingestion Error</span>`;
+                    console.error('Ingestion error:', error);
+                }
+            };
+
+            docUrlInput.addEventListener('change', handleIngestion);
+
             runButton.addEventListener('click', async () => {
                 const docUrl = docUrlInput.value;
                 const questions = questionsTextarea.value.split('\n').filter(q => q.trim() !== '');
+                const bearerToken = bearerTokenInput.value;
 
-                if (!docUrl || questions.length === 0) {
-                    alert('Please provide a document URL and at least one question.');
+                if (!docUrl || questions.length === 0 || !bearerToken) {
+                    alert('Please provide a document URL, at least one question, and a Bearer Token.');
                     return;
                 }
 
-                // --- Show loading state ---
                 resultsContainer.classList.remove('hidden');
-                loaderContainer.classList.remove('hidden');
                 errorContainer.classList.add('hidden');
                 answersContainer.innerHTML = '';
                 runButton.disabled = true;
@@ -109,44 +153,73 @@ What is the waiting period for cataract surgery?</textarea>
                         method: 'POST',
                         headers: {
                             'Content-Type': 'application/json',
-                            'Accept': 'application/json',
-                            // IMPORTANT: Add your Bearer Token here for authentication
-                            'Authorization': 'Bearer 7b0bbf4d2af55715d67327967709878f6fcead8b44f13cab4d0953d0ea1e1d4e'
+                            'Authorization': `Bearer ${bearerToken}`
                         },
-                        body: JSON.stringify({
-                            documents: docUrl,
-                            questions: questions
-                        })
+                        body: JSON.stringify({ documents: docUrl, questions: questions })
                     });
-
-                    loaderContainer.classList.add('hidden');
 
                     if (!response.ok) {
                         const errorData = await response.json();
                         throw new Error(errorData.detail || `HTTP error! status: ${response.status}`);
                     }
 
-                    const result = await response.json();
-                    
-                    // --- Display answers ---
-                    result.answers.forEach((answer, index) => {
-                        const question = questions[index];
-                        const answerBlock = document.createElement('div');
-                        answerBlock.className = 'p-4 border border-slate-200 rounded-lg bg-slate-50';
-                        answerBlock.innerHTML = `
-                            <p class="font-semibold text-slate-800 mb-2">${question}</p>
-                            <p class="text-slate-600">${answer}</p>
-                        `;
-                        answersContainer.appendChild(answerBlock);
-                    });
+                    const reader = response.body.getReader();
+                    const decoder = new TextDecoder();
+                    let buffer = '';
+                    let currentAnswerP = null;
+
+                    while (true) {
+                        const { value, done } = await reader.read();
+                        if (done) break;
+
+                        buffer += decoder.decode(value, { stream: true });
+                        const lines = buffer.split('\n\n');
+                        buffer = lines.pop(); 
+
+                        for (const line of lines) {
+                            if (line.startsWith('event: start_question')) {
+                                const dataLine = line.split('\ndata: ')[1];
+                                const data = JSON.parse(dataLine);
+                                const question = questions[data.question_index];
+                                
+                                const answerBlock = document.createElement('div');
+                                answerBlock.className = 'p-4 border border-slate-200 rounded-lg bg-slate-50';
+                                answerBlock.innerHTML = `<p class="font-semibold text-slate-800 mb-2">${question}</p>`;
+                                
+                                currentAnswerP = document.createElement('p');
+                                currentAnswerP.className = 'text-slate-600 answer-paragraph';
+                                currentAnswerP.innerHTML = `<div class="loader inline-block"></div>`;
+                                answerBlock.appendChild(currentAnswerP);
+                                answersContainer.appendChild(answerBlock);
+
+                            } else if (line.startsWith('event: answer_chunk')) {
+                                const dataLine = line.split('\ndata: ')[1];
+                                const data = JSON.parse(dataLine);
+                                if (currentAnswerP) {
+                                    if (currentAnswerP.querySelector('.loader')) {
+                                        currentAnswerP.innerHTML = '';
+                                    }
+                                    currentAnswerP.textContent += data.text;
+                                }
+                            } else if (line.startsWith('event: error')) {
+                                const dataLine = line.split('\ndata: ')[1];
+                                const data = JSON.parse(dataLine);
+                                errorMessage.textContent = data.message;
+                                errorContainer.classList.remove('hidden');
+                            } else if (line.startsWith('event: end_stream')) {
+                                console.log("Stream finished.");
+                                if (currentAnswerP && currentAnswerP.querySelector('.loader')) {
+                                    currentAnswerP.innerHTML = 'No answer generated.';
+                                }
+                                return;
+                            }
+                        }
+                    }
 
                 } catch (error) {
-                    // --- Show error state ---
-                    loaderContainer.classList.add('hidden');
                     errorMessage.textContent = error.message;
                     errorContainer.classList.remove('hidden');
                 } finally {
-                    // --- Reset button state ---
                     runButton.disabled = false;
                     runButton.classList.remove('opacity-50', 'cursor-not-allowed');
                 }

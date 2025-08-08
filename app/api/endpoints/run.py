@@ -1,94 +1,195 @@
 from fastapi import APIRouter, Depends, HTTPException, status
-from app.schemas.models import RunRequest, RunResponse
+from fastapi.responses import JSONResponse
+from app.schemas.models import RunRequest
 from app.core.security import verify_token
 import asyncio
+from typing import List
+from cachetools import TTLCache
+import hashlib
+import os
+import json
 
-# Correctly import the CLASS from each service file
+# Updated imports to use our tuned services
 from app.services.three_retrieval_service import RetrievalService
-from app.services.one_decomposer_agent import DecomposerAgent
-from app.services.two_hyde_agent import HydeAgent
-from app.services.combined_agent import CombinedAgent # Import the new merged agent
-from app.services.six_refiner_agent import RefinerAgent
+from app.services.one_planning_synthesis_agent import PlanningSynthesisAgent
 
-# Create an API router
 router = APIRouter()
 
-@router.post(
-    "/hackrx/run",
-    response_model=RunResponse,
-    summary="Run the full document QA pipeline"
-)
-async def run_submission(
-    request: RunRequest,
-    # This dependency protects the endpoint by verifying the Bearer token
-    _token: str = Depends(verify_token) 
-):
-    """
-    This endpoint orchestrates the entire multi-agent RAG workflow.
-    
-    - **Authentication**: Requires a valid Bearer token.
-    - **Ingestion**: Downloads and processes the PDF from the provided URL.
-    - **Orchestration**: For each question, it runs a more efficient agent pipeline:
-      1. Decompose -> 2. HyDE -> 3. Retrieve/Rerank -> 4. Synthesize & Critique -> 5. Refine
-    - **Response**: Returns a list of final, fact-checked answers.
-    """
+# --- Centralized Configuration for Easy Tuning ---
+# These parameters can be adjusted to trade off between accuracy and latency.
+# Lower values generally lead to lower latency.
+class AppConfig:
+    POOL_TOP_K = 100  # Reduced candidate pool size
+    GROUP_SIZE = 5  # Fewer centroids for hypothetical generation
+    POOL_TOP_RERANK = 7  # Fewer chunks to rerank per question
+    RETRY_EXPANDED_RERANK = 12  # Reduced number of extra chunks for retries
+    MULTI_SUBQ_TOP_K = 25  # Reduced top_k for multi-sub-question retrieval
+    SINGLE_SUBQ_TOP_K = 20  # Reduced top_k for single-question retrieval
+    USE_SERVICE_SIDE_FALLBACK_IF_AVAILABLE = True
+    CACHE_MAX_SIZE = 100 # Maximum number of items in the cache
+    CACHE_TTL = 300  # Cache time-to-live in seconds (5 minutes)
+
+config = AppConfig()
+
+retrieval_service: RetrievalService = None
+combined_agent: PlanningSynthesisAgent = None
+# Using TTLCache for a more robust caching strategy with size and time limits
+question_cache = TTLCache(maxsize=config.CACHE_MAX_SIZE, ttl=config.CACHE_TTL)
+
+def initialize_services():
+    global retrieval_service, combined_agent
+    if retrieval_service is None:
+        print("Initializing RetrievalService & PlanningSynthesisAgent...")
+        retrieval_service = RetrievalService(
+            embedding_model_name="all-MiniLM-L6-v2",  # Faster model with smaller embedding dimension (384)
+            reranker_model_name="cross-encoder/ms-marco-MiniLM-L-6-v2",
+            chunk_size_words=250,
+            chunk_overlap_words=50,
+            enable_lazy_cross_encoder=False
+        )
+        combined_agent = PlanningSynthesisAgent(retrieval_service=retrieval_service)
+        print("Initialization complete.")
+
+@router.post("/hackrx/run")
+async def run_submission(request: RunRequest, _token: str = Depends(verify_token)):
+        # --- ADDED: Log the incoming request body ---
+    print("\n--- INCOMING REQUEST ---")
     try:
-        # Initialize the retrieval service. This loads the ML models.
-        retrieval_service = RetrievalService()
-        
-        # Ingest and process the PDF. This is a blocking I/O and CPU-bound task.
-        # Running in a threadpool to avoid blocking the main async event loop.
-        await asyncio.to_thread(retrieval_service.ingest_and_process_pdf, request.documents)
+        # Use .model_dump_json for Pydantic v2+
+        print(request.model_dump_json(indent=2))
+    except AttributeError:
+        # Fallback for Pydantic v1
+        print(request.json(indent=2))
+    print("------------------------\n")
 
-        final_answers = []
-        
-        # Initialize agent instances
-        decomposer = DecomposerAgent()
-        hyde = HydeAgent()
-        combined_agent = CombinedAgent()
-        refiner = RefinerAgent()
+    initialize_services()
+    doc_url = request.documents
+    m = hashlib.md5()
+    m.update(doc_url.encode('utf-8'))
+    doc_namespace = m.hexdigest()
 
-        # Process each question sequentially through the agent pipeline
-        for question in request.questions:
-            print(f"\n--- Processing Question: {question} ---")
-
-            # 1. Decomposer Agent
-            sub_questions = decomposer.decompose_question(question)
-            print(f"Decomposed into: {sub_questions}")
-
-            # 2. HyDE Agent and 3. Retrieval Service
-            all_context_chunks = set() # Use a set to avoid duplicate context
-            for sub_q in sub_questions:
-                hypothetical_answer = hyde.generate_hypothetical_answer(sub_q)
-                print(f"  - Hypothetical answer for '{sub_q}': '{hypothetical_answer[:50]}...'")
-                
-                # Use the hypothetical answer to find the best context
-                context = retrieval_service.search_and_rerank(hypothetical_answer)
-                all_context_chunks.update(context)
-            
-            print(f"Retrieved {len(all_context_chunks)} unique context chunks.")
-
-            # 4. Combined Synthesizer and Critic Agent
-            combined_output = combined_agent.synthesize_and_critique(question, list(all_context_chunks))
-            draft_answer = combined_output.get("answer", "Failed to generate an answer.")
-            critique = {
-                "is_supported": combined_output.get("is_supported", False),
-                "critique": combined_output.get("critique", "Agent failed to produce a critique.")
-            }
-            print(f"Synthesized draft: '{draft_answer[:100]}...'")
-            print(f"Simultaneous Critique: {critique}")
-
-            # 5. Refiner Agent
-            final_answer = refiner.refine_answer(draft_answer, critique)
-            print(f"Final Answer: '{final_answer[:100]}...'")
-            
-            final_answers.append(final_answer)
-
-        return RunResponse(answers=final_answers)
-
+    try:
+        await asyncio.to_thread(
+            retrieval_service.ingest_and_process_pdf,
+            pdf_url=doc_url, 
+            namespace=doc_namespace,
+            force_reingest=False
+        )
+        question_cache.clear()
     except Exception as e:
-        print(f"An unexpected error occurred in the main workflow: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"An internal error occurred: {str(e)}"
+            detail=f"Document ingestion failed: {e}"
         )
+
+    try:
+        # Step 1: Plans for each Q
+        plans = [combined_agent.plan_and_research(q) for q in request.questions]
+        all_hypos = [ha for plan in plans for ha_list in plan.values() for ha in ha_list]
+
+        # Step 2: Global candidate pool
+        candidate_pool = await asyncio.to_thread(
+            retrieval_service.build_global_candidate_pool,
+            all_hypos,
+            config.POOL_TOP_K,
+            config.GROUP_SIZE
+        )
+
+        # Step 3: Local rerank from pool
+        def rerank_for(q: str) -> List[str]:
+            return retrieval_service.rerank_from_pool(q, candidate_pool, top_n_rerank=config.POOL_TOP_RERANK)
+
+        contexts_per_question = await asyncio.gather(*[
+            asyncio.to_thread(rerank_for, q) for q in request.questions
+        ])
+
+        # Step 4: Batch synthesize
+        answers = await combined_agent.synthesize_batch_answers(request.questions, contexts_per_question)
+
+        # Step 5: Retry “Not found”
+# --- Step 5: Retry "Not Found" Answers with Expanded Context ---
+        # This is our second, more intensive attempt for questions that failed the first time.
+
+        # Identify the original indices of all questions that returned "Not found"
+        questions_to_retry_indices = [
+            i for i, ans in enumerate(answers)
+            if isinstance(ans, str) and "not found" in ans.lower()
+        ]
+
+        # Only proceed if there are questions to retry
+        if questions_to_retry_indices:
+            print(f"Retrying {len(questions_to_retry_indices)} questions with expanded context...")
+
+            # Create a list of the question strings that need a retry
+            retry_questions = [request.questions[i] for i in questions_to_retry_indices]
+            
+            # For these specific questions, retrieve a larger number of context chunks
+            # from the original candidate pool. This is our new, more intensive strategy.
+            expanded_contexts = [
+                retrieval_service.rerank_from_pool(
+                    q,
+                    candidate_pool,
+                    top_n_rerank=config.RETRY_EXPANDED_RERANK # Use a larger value for the retry
+                ) for q in retry_questions
+            ]
+
+            # Send the new, smaller batch to the LLM for a second and final try
+            retry_answers = await combined_agent.synthesize_batch_answers(
+                retry_questions,
+                expanded_contexts
+            )
+
+            # Update the original answers list with the new results from the retry attempt
+            for original_index, new_answer in zip(questions_to_retry_indices, retry_answers):
+                answers[original_index] = new_answer
+
+         
+        # --- ADDED: Log the final response ---
+        print("\n--- FINAL ANSWERS RESPONSE ---")
+        print(json.dumps({"answers": answers}, indent=2))
+        print("----------------------------\n")
+        # --- End of log ---
+
+        return JSONResponse(content={"answers": answers})
+
+    except Exception as e:
+        print(f"Batch error, falling back: {e}")
+        answers = []
+        for q in request.questions:
+            try:
+                answers.append(await run_single_question_pipeline(q))
+            except Exception as inner:
+                answers.append(f"[Error: {inner}]")
+        return JSONResponse(content={"answers": answers})
+
+
+async def run_single_question_pipeline(question: str) -> str:
+    if question in question_cache:
+        return question_cache[question]
+
+    plan = combined_agent.plan_and_research(question)
+    all_chunks = set()
+
+    top_k = config.MULTI_SUBQ_TOP_K if len(plan) > 1 else config.SINGLE_SUBQ_TOP_K
+    use_fallback = config.USE_SERVICE_SIDE_FALLBACK_IF_AVAILABLE and hasattr(retrieval_service, "search_and_rerank_with_fallback")
+
+    async def get_ctx(sub_q: str, hypos: list):
+        local = set()
+        for ha in hypos:
+            try:
+                if use_fallback:
+                    ctx = await asyncio.to_thread(retrieval_service.search_and_rerank_with_fallback, ha, top_k, config.POOL_TOP_RERANK)
+                else:
+                    ctx = await asyncio.to_thread(retrieval_service.search_and_rerank, ha, top_k)
+                local.update(ctx)
+            except Exception as e:
+                print(f"Retrieval error: {e}")
+        return local
+
+    results = await asyncio.gather(*[get_ctx(sq, hypos) for sq, hypos in plan.items()])
+    for r in results:
+        all_chunks.update(r)
+
+    answer = await combined_agent.synthesize_final_answer(question, list(all_chunks))
+    question_cache[question] = answer
+    return answer

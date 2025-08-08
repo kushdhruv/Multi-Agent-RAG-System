@@ -8,7 +8,7 @@ An advanced, multi-agent Retrieval-Augmented Generation (RAG) system designed to
 - **Optimized Workflow**: Efficient agent pipeline that reduces latency and cost while maintaining accuracy
 - **Scalable Vector Search**: Utilizes Pinecone as a serverless vector database for fast, scalable document indexing and retrieval
 - **High-Performance Backend**: Built with FastAPI, providing high-speed, asynchronous API with automatic interactive documentation
-- **Modern LLMs**: Powered by Google's Gemini 1.5 Flash for fast, intelligent, and cost-effective agent operations
+- **Modern LLMs**: Powered by Google's Gemini 2.5 Flash for fast, intelligent, and cost-effective agent operations
 - **State-of-the-Art Retrieval**: Two-stage search process using bi-encoder for initial retrieval and cross-encoder for reranking
 - **Custom Frontend**: Clean, responsive user interface built with HTML and Tailwind CSS
 
@@ -30,7 +30,7 @@ This structured process ensures comprehensive, fact-checked answers against the 
 | Component | Technology | Purpose |
 |-----------|------------|---------|
 | **Backend** | FastAPI, Uvicorn | High-performance, asynchronous web framework |
-| **LLM** | Google Gemini 1.5 Flash | Powering all intelligent agent operations |
+| **LLM** | Google Gemini 2.5 Flash | Powering all intelligent agent operations |
 | **Vector DB** | Pinecone | Scalable, cloud-based vector search |
 | **Embeddings** | sentence-transformers | Creating vector representations of text |
 | **PDF Processing** | PyMuPDF | Fast and accurate text extraction from PDFs |

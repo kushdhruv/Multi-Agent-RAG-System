@@ -22,7 +22,7 @@ def verify_token(credentials: HTTPAuthorizationCredentials = Depends(bearer_sche
         HTTPException: If the token is invalid or missing, an HTTP 403 Forbidden
                        error is raised, preventing access to the endpoint.
     """
-    if not credentials or credentials.scheme!= "Bearer" or credentials.credentials!= settings.HACKATHON_BEARER_TOKEN:
+    if not credentials or credentials.scheme != "Bearer" or credentials.credentials != settings.HACKATHON_BEARER_TOKEN:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Invalid or missing authentication token.",
